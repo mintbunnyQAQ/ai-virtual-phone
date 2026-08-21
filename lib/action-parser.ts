@@ -40,7 +40,7 @@ export type ActionContext = {
 
 // ── Parser ──
 
-const ACTION_TAGS = ["朋友圈", "群消息", "评论", "回复", "消息", "私信"] as const;
+const ACTION_TAGS = ["朋友圈", "群消息", "评论", "回复", "消息", "私信", "群聊单聊"] as const;
 
 function normalizeActionQuotes(text: string): string {
     return text.replace(/[\u201C\u201D\u2018\u2019\u300C\u300D]/g, "\"");
@@ -178,7 +178,7 @@ export function parseActionTags(text: string): {
  */
 const KNOWN_ACTION_TAGS = [
     // 中文方括号格式
-    "朋友圈", "评论", "回复", "消息", "群消息", "私信",
+    "朋友圈", "评论", "回复", "消息", "群消息", "私信", "群聊单聊",
     // XML 格式 (AI 偶尔幻觉输出)
     "action_chat_message", "action_moments_post",
     "action_comment", "action_reply",
@@ -189,7 +189,7 @@ const KNOWN_ACTION_TAGS = [
     // 合并前旧标签名
     "chat_context", "chat_format", "chat_rich_actions", "chat_output_format",
     // 加好友
-    "add_friend_prompt", "添加好友",
+    "add_friend_prompt", "添加好友", "群聊单聊",
 ];
 
 /**
@@ -242,6 +242,7 @@ export async function dispatchActions(
                     await dispatchChatMessage(action, effectiveCtx);
                     break;
                 case "私信":
+                case "群聊单聊":
                     await dispatchPrivateMessage(action, effectiveCtx);
                     break;
                 case "群消息":
@@ -419,11 +420,15 @@ async function dispatchPrivateMessage(action: ActionTag, context: ActionContext)
 
     ensureCharacterChatContact(context.characterId);
     const session = createOrGetSession(context.characterId);
+    // 这里传入了 context.sourceEngine="group_chat"，但由于我们是想把群聊中产生的私聊消息"跨会话"投递给单聊窗口，
+    // 因此这里我们需要特别指明这是以角色身份发给单聊窗口的，不要带上 group 标志。
     await parseAndSaveResponse(action.content, session.id, 0, undefined, loadChatMessages(session.id));
 
-    console.log(`[ActionParser] Sent private message from "${action.actor}" via ${context.sourceEngine} engine`);
+    console.log(`[ActionParser] Sent private message from "${action.actor || context.characterId}" via ${context.sourceEngine} engine`);
     if (typeof window !== "undefined") {
         window.dispatchEvent(new CustomEvent("followup-fired", { detail: { sessionId: session.id } }));
+        // 触发全局未读红点和系统通知
+        sendBrowserNotification("私聊消息", { body: `${resolveActionCharacterName(action, context)} 给你发了一条私聊消息` });
     }
 }
 
