@@ -661,12 +661,19 @@
   max-height: 50vh;
 }
 
-/* 自定义 resize 手柄：淡色、小、半透明 */
+/* 自定义 resize 手柄：淡色半透明斜杠，视觉稍大，触发区域通过 padding 增大 */
+.chat-input-bar .chat-input-textarea {
+  padding-right: 20px;
+  padding-bottom: 8px;
+}
 .chat-input-bar .chat-input-textarea::-webkit-resizer {
   background:
-    linear-gradient(135deg, transparent 60%, var(--c-icon, #8e8e93) 60%, var(--c-icon, #8e8e93) 65%, transparent 65%,
-    transparent 72%, var(--c-icon, #8e8e93) 72%, var(--c-icon, #8e8e93) 77%, transparent 77%);
-  opacity: 0.25;
+    linear-gradient(135deg,
+      transparent 40%,
+      var(--c-icon, #8e8e93) 40%, var(--c-icon, #8e8e93) 45%, transparent 45%,
+      transparent 52%, var(--c-icon, #8e8e93) 52%, var(--c-icon, #8e8e93) 57%, transparent 57%,
+      transparent 64%, var(--c-icon, #8e8e93) 64%, var(--c-icon, #8e8e93) 69%, transparent 69%);
+  opacity: 0.32;
   border-radius: 0 0 var(--ui-radius-card) 0;
 }
 
