@@ -64,11 +64,42 @@ export function subscribeApiCallRecords(fn: () => void): () => void {
     return () => { _listeners.delete(fn); };
 }
 
+// ── 本地估算：发送时立刻计算 ──────────────────────────
+// 中文字符 × 1.5，英文字母 × 0.3，其余字符 × 0.5
+const CJK_RE = /[\u4e00-\u9fff\u3400-\u4dbf\uf900-\ufaff]/;
+const ASCII_LETTER_RE = /[a-zA-Z]/;
+
+function estimateTokens(text: string): number {
+    let tokens = 0;
+    for (let i = 0; i < text.length; i++) {
+        const ch = text[i];
+        if (CJK_RE.test(ch)) tokens += 1.5;
+        else if (ASCII_LETTER_RE.test(ch)) tokens += 0.3;
+        else tokens += 0.5;
+    }
+    return Math.round(tokens);
+}
+
+let _latestEstimate: number | null = null;
+
+export function getLatestEstimate(): number | null {
+    return _latestEstimate;
+}
+
 // ── 自动监听 DOM 事件 ──────────────────────────
 // chat-engine（错误路径）和 api-log-store（成功路径）通过
 // window.dispatchEvent(new CustomEvent("api-call-event", { detail }))
 // 把调用结果送过来，这里统一收集。
 if (typeof window !== "undefined") {
+    // 请求发出瞬间的本地估算（中文×1.5, 英文×0.3）
+    window.addEventListener("api-call-estimate", (e: Event) => {
+        const d = (e as CustomEvent).detail;
+        if (!d || typeof d !== "object") return;
+        const bodyText = String(d.bodyText ?? "");
+        _latestEstimate = bodyText ? estimateTokens(bodyText) : null;
+        _listeners.forEach(fn => fn());
+    });
+
     window.addEventListener("api-call-event", (e: Event) => {
         const d = (e as CustomEvent).detail;
         if (!d || typeof d !== "object") return;

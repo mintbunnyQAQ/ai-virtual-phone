@@ -827,6 +827,8 @@ export async function sendLLMStreamRequest(
     const llmTimeout = setTimeout(() => llmAbort.abort(), LLM_REQUEST_TIMEOUT_MS);
     const detachExternalAbort = attachExternalAbort(llmAbort, options?.signal);
 
+    if (typeof window !== "undefined") window.dispatchEvent(new CustomEvent("api-call-estimate", { detail: { bodyText: JSON.stringify(request.body) } }));
+
     try {
         const response = await fetchLlmPayload(request, { signal: llmAbort.signal });
         if (!response.ok) {
@@ -993,6 +995,8 @@ export async function sendLLMRequest(
     const llmAbort = new AbortController();
     const llmTimeout = setTimeout(() => llmAbort.abort(), LLM_REQUEST_TIMEOUT_MS);
     const detachExternalAbort = attachExternalAbort(llmAbort, options?.signal);
+
+    if (typeof window !== "undefined") window.dispatchEvent(new CustomEvent("api-call-estimate", { detail: { bodyText: requestBodyJson } }));
 
     try {
         const response = await fetchLlmPayload(request, { signal: llmAbort.signal });
@@ -1173,6 +1177,8 @@ export async function sendLLMToolStreamRequest(
     const toolDrafts = new Map<number, StreamToolCallDraft>();
     const firedToolCallStarts = new Set<number>();
 
+    if (typeof window !== "undefined") window.dispatchEvent(new CustomEvent("api-call-estimate", { detail: { bodyText: JSON.stringify(request.body) } }));
+
     try {
         const response = await fetchLlmPayload(request, { signal: llmAbort.signal });
 
@@ -1323,6 +1329,8 @@ export async function sendLLMToolRequest(
     const llmAbort = new AbortController();
     const llmTimeout = setTimeout(() => llmAbort.abort(), LLM_REQUEST_TIMEOUT_MS);
     const detachExternalAbort = attachExternalAbort(llmAbort, options?.signal);
+
+    if (typeof window !== "undefined") window.dispatchEvent(new CustomEvent("api-call-estimate", { detail: { bodyText: JSON.stringify(request.body) } }));
 
     try {
         const response = await fetchLlmPayload(request, { signal: llmAbort.signal });

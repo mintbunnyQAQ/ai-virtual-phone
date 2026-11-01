@@ -11,6 +11,7 @@ import {
     getApiCallRecords,
     clearApiCallRecords,
     subscribeApiCallRecords,
+    getLatestEstimate,
     type ApiCallRecord,
 } from "@/lib/api-call-log-store";
 
@@ -23,12 +24,9 @@ function formatTime(iso: string): string {
     }
 }
 
-function formatTokens(usage?: ApiCallRecord["usage"]): string {
-    if (!usage) return "";
-    const parts: string[] = [];
-    if (typeof usage.prompt_tokens === "number") parts.push(`↑${usage.prompt_tokens}`);
-    if (typeof usage.completion_tokens === "number") parts.push(`↓${usage.completion_tokens}`);
-    return parts.join(" ");
+function formatCompletionTokens(usage?: ApiCallRecord["usage"]): string {
+    if (!usage || typeof usage.completion_tokens !== "number") return "";
+    return `${usage.completion_tokens.toLocaleString()} tokens`;
 }
 
 type FloatingPosition = { left: number; top: number };
@@ -64,7 +62,7 @@ export function ApiCallLogFloat() {
     useEffect(() => {
         const sync = () => {
             const settings = loadChatAppSettings();
-            const next = (settings as Record<string, unknown>).apiCallLogEnabled === true;
+            const next = settings.apiCallLogEnabled === true;
             setEnabled(next);
             if (!next) setOpen(false);
         };
@@ -190,6 +188,7 @@ export function ApiCallLogFloat() {
                             </button>
                         </div>
                     </div>
+                    <LatestPromptTokenBar records={records} />
                     <div className="api-call-log-body">
                         {records.length === 0 ? (
                             <div className="api-call-log-empty">暂无调用记录</div>
@@ -205,10 +204,38 @@ export function ApiCallLogFloat() {
     );
 }
 
+function LatestPromptTokenBar({ records }: { records: ApiCallRecord[] }) {
+    const estimate = getLatestEstimate();
+    // API 返回的精确值：取最近一条有 usage 的记录
+    let apiPrompt: number | null = null;
+    for (let i = records.length - 1; i >= 0; i--) {
+        const u = records[i].usage;
+        if (u && typeof u.prompt_tokens === "number") {
+            apiPrompt = u.prompt_tokens;
+            break;
+        }
+    }
+    return (
+        <div className="api-call-log-token-bar">
+            <span className="api-call-log-token-label">本轮发送</span>
+            <span className="api-call-log-token-value">
+                {estimate !== null
+                    ? `≈${estimate.toLocaleString()}`
+                    : "-"
+                }
+                {apiPrompt !== null
+                    ? <span className="api-call-log-token-exact">（实际 {apiPrompt.toLocaleString()}）</span>
+                    : null
+                }
+            </span>
+        </div>
+    );
+}
+
 function RecordItem({ record }: { record: ApiCallRecord }) {
     const [expanded, setExpanded] = useState(false);
     const isError = record.status === "error";
-    const tokens = formatTokens(record.usage);
+    const completionTokens = formatCompletionTokens(record.usage);
 
     return (
         <div
@@ -232,8 +259,8 @@ function RecordItem({ record }: { record: ApiCallRecord }) {
                     {record.characterName && (
                         <div><span className="api-call-log-label">角色</span>{record.characterName}</div>
                     )}
-                    {tokens && (
-                        <div><span className="api-call-log-label">Token</span>{tokens}</div>
+                    {completionTokens && (
+                        <div><span className="api-call-log-label">接收</span>{completionTokens}</div>
                     )}
                     {isError && record.errorMessage && (
                         <div className="api-call-log-error-msg">

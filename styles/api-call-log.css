@@ -123,6 +123,37 @@
     background: rgba(255, 255, 255, 0.08);
 }
 
+.api-call-log-token-bar {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    padding: 6px 14px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+    flex-shrink: 0;
+}
+
+.api-call-log-token-label {
+    font-size: 11px;
+    color: var(--c-icon, #8e8e93);
+    opacity: 0.7;
+}
+
+.api-call-log-token-value {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--c-text-title, #e8e8ea);
+    font-variant-numeric: tabular-nums;
+}
+
+.api-call-log-token-exact {
+    font-size: 11px;
+    font-weight: 400;
+    color: var(--c-icon, #8e8e93);
+    opacity: 0.7;
+    margin-left: 4px;
+}
+
 .api-call-log-body {
     flex: 1;
     overflow-y: auto;

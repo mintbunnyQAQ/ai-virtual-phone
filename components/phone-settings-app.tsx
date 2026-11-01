@@ -243,7 +243,7 @@ export function PhoneSettingsApp({ onClose, onNotice }: SettingsPageProps) {
     const handleApiCallLogChange = useCallback((next: boolean) => {
         setApiCallLogEnabled(next);
         const settings = loadChatAppSettings();
-        saveChatAppSettings({ ...settings, apiCallLogEnabled: next } as typeof settings & { apiCallLogEnabled: boolean });
+        saveChatAppSettings({ ...settings, apiCallLogEnabled: next });
         onNotice(next ? "已开启 API 调用记录" : "已关闭 API 调用记录");
     }, [onNotice]);
 
@@ -361,7 +361,7 @@ export function PhoneSettingsApp({ onClose, onNotice }: SettingsPageProps) {
         setTimeAware(settings.timeAware !== false);
         setPromptViewerEnabled(settings.promptViewerEnabled === true);
         setQuickActionEnabled(settings.quickActionEnabled === true);
-        setApiCallLogEnabled((settings as Record<string, unknown>).apiCallLogEnabled === true);
+        setApiCallLogEnabled(settings.apiCallLogEnabled === true);
         setFloatingDockEnabled(settings.floatingDockEnabled === true);
         setKeepAlive(loadKeepAlive());
     }, []);
