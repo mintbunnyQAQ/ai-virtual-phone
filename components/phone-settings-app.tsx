@@ -112,6 +112,7 @@ export function PhoneSettingsApp({ onClose, onNotice }: SettingsPageProps) {
     const [timeAware, setTimeAware] = useState(true);
     const [promptViewerEnabled, setPromptViewerEnabled] = useState(false);
     const [quickActionEnabled, setQuickActionEnabled] = useState(false);
+    const [apiCallLogEnabled, setApiCallLogEnabled] = useState(false);
     const [floatingDockEnabled, setFloatingDockEnabled] = useState(false);
     const [floatingDockSheetOpen, setFloatingDockSheetOpen] = useState(false);
     const [keepAlive, setKeepAlive] = useState(false);
@@ -239,6 +240,13 @@ export function PhoneSettingsApp({ onClose, onNotice }: SettingsPageProps) {
         onNotice(next ? "已开启快捷操作" : "已关闭快捷操作");
     }, [onNotice]);
 
+    const handleApiCallLogChange = useCallback((next: boolean) => {
+        setApiCallLogEnabled(next);
+        const settings = loadChatAppSettings();
+        saveChatAppSettings({ ...settings, apiCallLogEnabled: next } as typeof settings & { apiCallLogEnabled: boolean });
+        onNotice(next ? "已开启 API 调用记录" : "已关闭 API 调用记录");
+    }, [onNotice]);
+
     const handleFloatingDockChange = useCallback((next: boolean) => {
         setFloatingDockEnabled(next);
         saveChatAppSettings({ ...loadChatAppSettings(), floatingDockEnabled: next });
@@ -353,6 +361,7 @@ export function PhoneSettingsApp({ onClose, onNotice }: SettingsPageProps) {
         setTimeAware(settings.timeAware !== false);
         setPromptViewerEnabled(settings.promptViewerEnabled === true);
         setQuickActionEnabled(settings.quickActionEnabled === true);
+        setApiCallLogEnabled((settings as Record<string, unknown>).apiCallLogEnabled === true);
         setFloatingDockEnabled(settings.floatingDockEnabled === true);
         setKeepAlive(loadKeepAlive());
     }, []);
@@ -508,6 +517,18 @@ export function PhoneSettingsApp({ onClose, onNotice }: SettingsPageProps) {
                                     </span>
                                     <span className="menu-right settings-tools-menu-toggle">
                                         <Toggle checked={quickActionEnabled} onChange={handleQuickActionChange} className="settings-toggle-control" />
+                                    </span>
+                                </div>
+                                <div className="menu-item settings-tools-menu-item">
+                                    <span className="card-icon" style={{ "--icon-color": CONTENT_APP_ACCENTS.calendar } as CSSProperties}>
+                                        <Activity size={22} strokeWidth={1.75} />
+                                    </span>
+                                    <span className="settings-tools-menu-copy">
+                                        <span className="menu-label appearance-menu-item-label">API 调用记录</span>
+                                        <span className="menu-desc settings-tools-menu-desc">悬浮球查看最近 API 调用与报错</span>
+                                    </span>
+                                    <span className="menu-right settings-tools-menu-toggle">
+                                        <Toggle checked={apiCallLogEnabled} onChange={handleApiCallLogChange} className="settings-toggle-control" />
                                     </span>
                                 </div>
                             </div>

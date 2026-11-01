@@ -870,6 +870,8 @@ export async function sendLLMStreamRequest(
             reasoning: streamedReasoning.trim() || undefined,
         });
 
+        if (typeof window !== "undefined") window.dispatchEvent(new CustomEvent("api-call-event", { detail: { model: config.defaultModel, provider: config.provider, characterName: meta?.characterName, source: options?.appId ?? "chat", status: "success", usage: undefined } }));
+
         if (!options?.skipOutputRegex) {
             const macroEngine = new MacroEngine(meta?.characterName ?? "", meta?.userName ?? "用户");
             const activeTags = getActiveAppTags(options?.appId ?? "chat", {
@@ -880,6 +882,7 @@ export async function sendLLMStreamRequest(
         }
         return { content: rawOutput, rawResponse, providerKind: request.providerKind };
     } catch (error: unknown) {
+        if (typeof window !== "undefined") window.dispatchEvent(new CustomEvent("api-call-event", { detail: { model: config.defaultModel, provider: config.provider, characterName: meta?.characterName, source: options?.appId ?? "chat", status: "error", errorMessage: error instanceof Error ? error.message : String(error) } }));
         if (error instanceof DOMException && (error as DOMException).name === "AbortError") {
             if (options?.signal?.aborted) throw error;
             throw new ChatEngineError(`AI 流式回复超时（${LLM_REQUEST_TIMEOUT_SECONDS}秒），请重试。`);
@@ -1046,6 +1049,8 @@ export async function sendLLMRequest(
             reasoning: parsed.reasoning || undefined,
         });
 
+        if (typeof window !== "undefined") window.dispatchEvent(new CustomEvent("api-call-event", { detail: { model: config.defaultModel, provider: config.provider, characterName: meta?.characterName, source: options?.appId ?? "chat", status: "success", usage: parsed.usage } }));
+
         if (options?.skipOutputRegex) {
             return rawOutput;
         }
@@ -1057,6 +1062,7 @@ export async function sendLLMRequest(
         });
         return applyOutputRegex(rawOutput, regexes, { macroEngine, activeTags });
     } catch (error: unknown) {
+        if (typeof window !== "undefined") window.dispatchEvent(new CustomEvent("api-call-event", { detail: { model: config.defaultModel, provider: config.provider, characterName: meta?.characterName, source: options?.appId ?? "chat", status: "error", errorMessage: error instanceof Error ? error.message : String(error) } }));
         if (error instanceof DOMException && (error as DOMException).name === "AbortError") {
             throw new ChatEngineError(`AI 回复超时（${LLM_REQUEST_TIMEOUT_SECONDS}秒），请重试。`);
         }
@@ -1262,6 +1268,8 @@ export async function sendLLMToolStreamRequest(
             reasoning: reasoning || undefined,
         });
 
+        if (typeof window !== "undefined") window.dispatchEvent(new CustomEvent("api-call-event", { detail: { model: config.defaultModel, provider: config.provider, characterName: meta?.characterName, source: options?.appId ?? "chat", status: "success", usage: undefined } }));
+
         if (!content && toolCalls.length === 0 && truncatedNames.length === 0) {
             throw new ChatEngineError("原生动作流式响应没有解析到文本或动作。");
         }
@@ -1276,6 +1284,7 @@ export async function sendLLMToolStreamRequest(
             providerKind: request.providerKind,
         };
     } catch (error: unknown) {
+        if (typeof window !== "undefined") window.dispatchEvent(new CustomEvent("api-call-event", { detail: { model: config.defaultModel, provider: config.provider, characterName: meta?.characterName, source: options?.appId ?? "chat", status: "error", errorMessage: error instanceof Error ? error.message : String(error) } }));
         if (error instanceof DOMException && error.name === "AbortError") {
             if (options?.signal?.aborted) throw error;
             throw new ChatEngineError(`AI 原生动作流式回复超时（${LLM_REQUEST_TIMEOUT_SECONDS}秒），请重试。`);
@@ -1364,6 +1373,8 @@ export async function sendLLMToolRequest(
             usage: parsed.usage,
         });
 
+        if (typeof window !== "undefined") window.dispatchEvent(new CustomEvent("api-call-event", { detail: { model: config.defaultModel, provider: config.provider, characterName: meta?.characterName, source: options?.appId ?? "chat", status: "success", usage: parsed.usage } }));
+
         if (!options?.skipOutputRegex && rawOutput) {
             const macroEngine = new MacroEngine(meta?.characterName ?? "", meta?.userName ?? "用户");
             const activeTags = getActiveAppTags(options?.appId ?? "chat", {
@@ -1383,6 +1394,7 @@ export async function sendLLMToolRequest(
             usage: parsed.usage,
         };
     } catch (error: unknown) {
+        if (typeof window !== "undefined") window.dispatchEvent(new CustomEvent("api-call-event", { detail: { model: config.defaultModel, provider: config.provider, characterName: meta?.characterName, source: options?.appId ?? "chat", status: "error", errorMessage: error instanceof Error ? error.message : String(error) } }));
         if (error instanceof DOMException && error.name === "AbortError") {
             if (options?.signal?.aborted) throw error;
             throw new ChatEngineError(`AI 原生动作回复超时（${LLM_REQUEST_TIMEOUT_SECONDS}秒），请重试。`);

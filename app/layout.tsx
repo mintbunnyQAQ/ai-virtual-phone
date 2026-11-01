@@ -1,12 +1,14 @@
 import type { Metadata, Viewport } from "next";
 import type { ReactNode } from "react";
 
+import { ApiCallLogBootstrap } from "@/components/api-call-log-bootstrap";
 import { ChatPluginBootstrap } from "@/components/chat-plugin-bootstrap";
 import { ChatReasoningVisibilityController } from "@/components/chat-reasoning-visibility-controller";
 import { CSSImportEnhancer } from "@/components/css-import-enhancer";
 import { PWAManifestInjector } from "@/components/pwa-manifest-injector";
 import { PWARegistrar } from "@/components/pwa-registrar";
 import "../styles/fonts.css";
+import "../styles/api-call-log.css";
 import "./globals.css";
 
 export const viewport: Viewport = {
@@ -45,6 +47,7 @@ export default function RootLayout({
         <CSSImportEnhancer />
         <ChatPluginBootstrap />
         <ChatReasoningVisibilityController />
+        <ApiCallLogBootstrap />
         {children}
       </body>
     </html>
