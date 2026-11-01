@@ -656,6 +656,18 @@
   border: 0.5px solid var(--c-input-border);
   border-radius: var(--ui-radius-card);
   background: color-mix(in srgb, var(--c-card) 60%, transparent);
+  resize: vertical;
+  min-height: 36px;
+  max-height: 50vh;
+}
+
+/* 自定义 resize 手柄：淡色、小、半透明 */
+.chat-input-bar .chat-input-textarea::-webkit-resizer {
+  background:
+    linear-gradient(135deg, transparent 60%, var(--c-icon, #8e8e93) 60%, var(--c-icon, #8e8e93) 65%, transparent 65%,
+    transparent 72%, var(--c-icon, #8e8e93) 72%, var(--c-icon, #8e8e93) 77%, transparent 77%);
+  opacity: 0.25;
+  border-radius: 0 0 var(--ui-radius-card) 0;
 }
 
 .chat-theater-mode-strip {
