@@ -40,7 +40,7 @@ import {
 } from "./calendar-storage";
 import type { CalendarOwnerType, CalendarScheduleItem } from "./calendar-types";
 import { formatIsoDate, getWeekStartIso, normalizeTime } from "./calendar-utils";
-import { simpleLLMCall } from "./api-helpers";
+import { simpleLLMCallPreferStream } from "./simple-llm-stream";
 import { generateEmbedding } from "./memory-embedding";
 import { loadMemoryConfig, loadMemoryEntriesByType, saveMemoryEntry } from "./memory-storage";
 import { formatCoreMemories, formatLongTermMemories } from "./memory-injector";
@@ -76,6 +76,13 @@ import {
   WALLET_BALANCE_ACCOUNT_ID,
 } from "./wallet-storage";
 import { kvGet, kvSet, registerKvMigration } from "./kv-db";
+import {
+  appendBridgeOutbox,
+  bridgeConnection,
+  readAllBridgeStateSnapshots,
+  readBridgeStateSnapshot,
+  sanitizeBridgeDataKey,
+} from "./reality-bridge/storage";
 
 const CUSTOM_APP_NOTIFICATIONS_KEY = "ai_phone_custom_app_notifications_v1";
 const CUSTOM_APP_BADGES_KEY = "ai_phone_custom_app_badges_v1";
@@ -169,6 +176,7 @@ const HOST_ACTION_PERMISSIONS: Record<string, CustomAppPermission[]> = {
   "calendar.write": ["calendar.write"],
   "world.write": ["world.write"],
   "world.activate": ["world.activate"],
+  "bridge.send": ["bridge.send"],
 };
 
 function emitHostStateUpdated(): void {
@@ -1318,8 +1326,9 @@ export async function runCustomAppAiChat(app: InstalledCustomApp, record: Record
       { role: "user", content: String(record.prompt ?? record.input ?? record.content ?? "").trim() || "请继续。" },
     ].filter(Boolean) as { role: string; content: string }[];
   const timeoutMs = optionalCustomAppTimeoutMs(record.timeoutMs);
+  // 优先流式：长生成在 iOS Safari 上非流式约 60 秒无数据就会断开（见 simple-llm-stream.ts）
   const result = await withOptionalCustomAppTimeout(timeoutMs, "ai.chat", signal => (
-    simpleLLMCall(config, messages, {
+    simpleLLMCallPreferStream(config, messages, {
       temperature: typeof record.temperature === "number" ? record.temperature : undefined,
       max_tokens: typeof record.maxTokens === "number" ? record.maxTokens : typeof record.max_tokens === "number" ? record.max_tokens : undefined,
       signal,
@@ -2290,6 +2299,39 @@ export function updateCustomAppDataRecord(app: InstalledCustomApp, record: Recor
   return updated;
 }
 
+/* ---------- 现实桥（自定义 APP 出站通道） ---------- */
+
+/** APP 向现实桥发件箱回传数据：iPhone 快捷指令的「检查回传」会取走并按信号名执行 */
+export async function sendCustomAppBridgeOutbox(
+  record: Record<string, unknown>,
+): Promise<{ ok: true; id: string; type: string }> {
+  const type = cleanText(record.type, 60);
+  if (!type) throw new Error("bridge.send 缺少 type（信号名）。");
+  const rawPayload = record.payload ?? record.text ?? record.data ?? "";
+  const payload = typeof rawPayload === "string" ? rawPayload : JSON.stringify(rawPayload);
+  const { config, ready } = bridgeConnection();
+  if (!ready) throw new Error("现实桥云端存储未配置，无法回传。请先在现实桥 APP 里完成配置。");
+  const entry = await appendBridgeOutbox(config, {
+    type,
+    payload: payload.replace(/\u0000/g, "").slice(0, 2000),
+    source: "app",
+  });
+  return { ok: true, id: entry.id, type: entry.type };
+}
+
+/** APP 读取现实桥手机状态快照（bridge-state/<key>.json，由快捷指令自动化覆盖写入） */
+export async function readCustomAppBridgeState(record: Record<string, unknown>): Promise<unknown> {
+  const { config, ready } = bridgeConnection();
+  if (!ready) throw new Error("现实桥云端存储未配置，无法读取。请先在现实桥 APP 里完成配置。");
+  const key = sanitizeBridgeDataKey(cleanText(record.key, 40));
+  if (key) {
+    const snapshot = await readBridgeStateSnapshot(config, key);
+    return snapshot ? { key, ...snapshot } : null;
+  }
+  const limit = Math.max(1, Math.min(12, Number(record.limit) || 12));
+  return readAllBridgeStateSnapshots(config, limit);
+}
+
 export async function executeCustomAppHostAction(
   app: InstalledCustomApp,
   rawAction: CustomAppHostAction,
@@ -2347,6 +2389,8 @@ export async function executeCustomAppHostAction(
       return writeCustomAppWorld(app, payload);
     case "world.activate":
       return activateCustomAppWorld(app, payload);
+    case "bridge.send":
+      return sendCustomAppBridgeOutbox(payload);
     default:
       throw new Error(`未知后台动作：${actionType}`);
   }

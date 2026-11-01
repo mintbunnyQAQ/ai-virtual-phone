@@ -9,6 +9,8 @@ import {
     type LlmToolCall,
 } from "./llm-provider-adapter";
 import { sendLLMToolStreamRequest, type LLMToolRequestResult } from "./chat-engine";
+import { fetchLlmPayload } from "./llm-http";
+import { pushApiLog } from "./api-log-store";
 import type { LLMContentPart } from "./llm-prompt-assembler";
 import { loadApiConfigs, loadBindingConfig } from "./settings-storage";
 import type { ApiConfig } from "./settings-types";
@@ -117,12 +119,7 @@ async function streamQaProviderRequest(
     let reasoning = "";
 
     try {
-        const response = await fetch(request.url, {
-            method: "POST",
-            headers: request.headers,
-            body: JSON.stringify(request.body),
-            signal: llmAbort.signal,
-        });
+        const response = await fetchLlmPayload(request, { signal: llmAbort.signal });
         if (!response.ok) throw new Error(`API Stream ${response.status}: ${await response.text()}`);
         if (!response.body) throw new Error("流式响应没有 body。");
 
@@ -208,6 +205,7 @@ type QaVisibleSink = (text: string) => void | Promise<void>;
 const QA_DIRECTIVE_START = /\[[^\[\]\n]{0,60}?(?:执行动作|工具调用|获取指令)/;
 const QA_THINK_START = /<\s*(?:think|thinking)\b/i;
 const QA_THINK_END = /<\/\s*(?:think|thinking)\s*>/i;
+const NOT_A_BLOCK = Symbol("not-a-block");
 
 function createQaStreamFilter(sink: QaVisibleSink, onHolding?: (holding: boolean) => void | Promise<void>) {
     let buffer = "";
@@ -219,21 +217,31 @@ function createQaStreamFilter(sink: QaVisibleSink, onHolding?: (holding: boolean
         await onHolding?.(next);
     };
 
-    const findStart = (text: string): number => {
-        const directive = QA_DIRECTIVE_START.exec(text);
-        const think = QA_THINK_START.exec(text);
+    const findStart = (text: string, from = 0): number => {
+        const rest = text.slice(from);
+        const directive = QA_DIRECTIVE_START.exec(rest);
+        const think = QA_THINK_START.exec(rest);
         const indexes = [directive?.index, think?.index].filter((v): v is number => typeof v === "number");
-        return indexes.length ? Math.min(...indexes) : -1;
+        return indexes.length ? from + Math.min(...indexes) : -1;
     };
+
+    const isThinkStart = (text: string, start: number): boolean => QA_THINK_START.test(text.slice(start, start + 12));
 
     // 指令收尾：对参数括号做字符串感知的配平扫描。
     // 不能用「第一个 )]」判断——代码里 arr[fn()] 这类序列会提前骗停；
     // 也不能设长度上限放弃——放弃后指令尾部会当正文泄漏（见 e2e/test-leak-repro）。
-    const findDirectiveEnd = (text: string, start: number): number | null => {
-        const half = text.indexOf("(", start);
-        const full = text.indexOf("（", start);
-        let i = half === -1 ? full : full === -1 ? half : Math.min(half, full);
-        if (i === -1) return null; // 参数括号还没流到
+    // 参数括号之前先遇到换行或 ]：按 parseToolCallAt 的规则这不是执行指令（例如正文里提到
+    // 「`[执行动作: 写入]`」），返回 NOT_A_BLOCK 当正文显示，不再扣住后文；
+    // [获取指令:xxx] 本来就不带参数括号，到 ] 为止整条隐藏。
+    const findDirectiveEnd = (text: string, start: number): number | null | typeof NOT_A_BLOCK => {
+        let i = start + 1;
+        for (; i < text.length; i++) {
+            const ch = text[i];
+            if (ch === "\n") return NOT_A_BLOCK;
+            if (ch === "]") return text.slice(start, i).includes("获取指令") ? i + 1 : NOT_A_BLOCK;
+            if (ch === "(" || ch === "（") break;
+        }
+        if (i >= text.length) return null; // 参数括号还没流到
         let depth = 0;
         let inString = false;
         for (; i < text.length; i++) {
@@ -259,8 +267,8 @@ function createQaStreamFilter(sink: QaVisibleSink, onHolding?: (holding: boolean
         return null;
     };
 
-    const findEnd = (text: string, start: number): number | null => {
-        if (QA_THINK_START.test(text.slice(start, start + 12))) {
+    const findEnd = (text: string, start: number): number | null | typeof NOT_A_BLOCK => {
+        if (isThinkStart(text, start)) {
             const match = QA_THINK_END.exec(text.slice(start));
             return match ? start + match.index + match[0].length : null;
         }
@@ -280,10 +288,21 @@ function createQaStreamFilter(sink: QaVisibleSink, onHolding?: (holding: boolean
     const drain = async (final: boolean) => {
         let out = "";
         let work = buffer;
+        let from = 0;
         for (;;) {
-            const start = findStart(work);
+            const start = findStart(work, from);
             if (start === -1) break;
             const end = findEnd(work, start);
+            if (end === NOT_A_BLOCK) {
+                from = start + 1;
+                continue;
+            }
+            // 流已结束、<think> 仍未闭合：不是真的思考块，而是正文里提到了这个标签
+            // （如「模型会输出 `<think>` 标签」）。当正文显示，否则后文会被整段丢弃。
+            if (end == null && final && isThinkStart(work, start)) {
+                from = start + 1;
+                continue;
+            }
             if (end == null) {
                 out += work.slice(0, start);
                 buffer = final ? "" : work.slice(start);
@@ -296,6 +315,7 @@ function createQaStreamFilter(sink: QaVisibleSink, onHolding?: (holding: boolean
             }
             out += work.slice(0, start);
             work = work.slice(end);
+            from = 0;
         }
         if (final) {
             out += work;
@@ -335,27 +355,39 @@ async function requestQaCompletion(
     // 输出护栏：配置了「单次最大输出 token」时每次请求带 max_tokens，
     // 写超被服务端安全截断（agent 循环里会自动续接），而不是拖垮整轮
     const maxTokens = getQaMaxOutputTokens() ?? undefined;
+    // 工坊调用记录：与角色聊天/记忆等底层日志隔离，只进工坊右上角「调用记录」
+    const logQaCall = (entry: { model: string; messages: { role: string; content: string | LLMContentPart[]; marker?: string }[]; rawResponse: string; reasoning?: string }) => {
+        pushApiLog({
+            characterName: "工坊",
+            source: "qa",
+            channel: "qa",
+            model: entry.model,
+            messages: entry.messages.map(m => ({
+                role: m.role,
+                content: typeof m.content === "string" ? m.content : "[vision: 含图片的多模态消息]",
+            })),
+            rawResponse: entry.rawResponse,
+            reasoning: entry.reasoning?.trim() || undefined,
+        });
+    };
     try {
         const streamRequest = buildProviderRequest(apiConfig, null, messages, { stream: true, maxTokens });
         const result = await streamQaProviderRequest(streamRequest, { signal: options?.signal }, options?.callbacks);
         if (!result.content.trim()) throw new Error("LLM 返回了空内容");
+        logQaCall({ model: apiConfig.defaultModel, messages: streamRequest.messagesForLog, rawResponse: result.content, reasoning: result.reasoning });
         return result;
     } catch (streamError) {
         if (options?.signal?.aborted) throw streamError;
         await options?.callbacks?.onStreamFallback?.(formatQaErrorMessage(streamError));
         const request = buildProviderRequest(apiConfig, null, messages, { maxTokens });
-        const response = await fetch(request.url, {
-            method: "POST",
-            headers: request.headers,
-            body: JSON.stringify(request.body),
-            signal: options?.signal,
-        });
+        const response = await fetchLlmPayload(request, { signal: options?.signal });
         if (!response.ok) throw new Error(`API ${response.status}: ${await response.text()}`);
         const parsed = parseProviderResponse(request.providerKind, await response.json());
         const content = stripHallucinatedTimestamps(parsed.content || "").trim();
         if (!content) throw new Error("LLM 返回了空内容");
         const visible = stripThinkBlocks(content);
         if (visible) await options?.callbacks?.onDelta?.(visible);
+        logQaCall({ model: apiConfig.defaultModel, messages: request.messagesForLog, rawResponse: content, reasoning: parsed.reasoning });
         return { content, reasoning: parsed.reasoning || "" };
     }
 }
@@ -458,6 +490,8 @@ export type QaContextEntry = {
     content: string;
     /** user：随消息附带的图片（dataURL）；识图未开启时适配层会自动降级为占位文本 */
     images?: string[];
+    /** user：随消息附带的纯文本或代码附件 */
+    files?: { name: string; content: string }[];
     /** assistant：原生协议的工具调用（文本协议轮次不填，指令已在 content 里） */
     toolCalls?: LlmToolCall[];
     /** tool：来源调用 id（原生轮次才有）与工具名 */
@@ -467,11 +501,13 @@ export type QaContextEntry = {
     turn?: string;
 };
 
-/** user 条目内容：带图片时转多模态 parts（识图未开启由适配层降级为占位） */
+/** user 条目内容：先拼接文本附件；带图片时再转多模态 parts。 */
 function userEntryContent(entry: QaContextEntry): string | LLMContentPart[] {
-    if (!entry.images?.length) return entry.content;
+    const fileBlocks = (entry.files ?? []).map((file) => `\n\n[附件：${file.name}]\n${file.content}`).join("");
+    const textContent = `${entry.content}${fileBlocks}`;
+    if (!entry.images?.length) return textContent;
     return [
-        { type: "text", text: entry.content },
+        { type: "text", text: textContent },
         ...entry.images.map((url) => ({ type: "image_url" as const, image_url: { url } })),
     ];
 }
@@ -529,10 +565,16 @@ export async function compactQaContext(entries: QaContextEntry[], options?: { si
     const lines = entries.map((entry) => {
         const head = entry.role === "user" ? "用户" : entry.role === "assistant" ? "助手" : `工具结果(${entry.name ?? "工具"})`;
         const body = entry.content.length > 4000 ? `${entry.content.slice(0, 4000)}…（截断）` : entry.content;
+        const files = entry.files?.length
+            ? `\n${entry.files.map((file) => {
+                const content = file.content.length > 4000 ? `${file.content.slice(0, 4000)}…（截断）` : file.content;
+                return `[附件：${file.name}]\n${content}`;
+            }).join("\n")}`
+            : "";
         const calls = entry.toolCalls?.length
             ? `\n[调用工具] ${entry.toolCalls.map((c) => `${c.name}(${JSON.stringify(c.args ?? {}).slice(0, 400)})`).join("；")}`
             : "";
-        return `【${head}】${body}${calls}`;
+        return `【${head}】${body}${files}${calls}`;
     });
     let transcript = lines.join("\n\n");
     if (transcript.length > 150_000) transcript = transcript.slice(-150_000);
@@ -709,12 +751,7 @@ async function callQaAgentNative(apiConfig: ApiConfig, history: QaEngineMessage[
             if (options?.signal?.aborted) throw streamError;
             await callbacks?.onStreamFallback?.(formatQaErrorMessage(streamError));
             const fallbackRequest = buildProviderRequest(apiConfig, null, messages, { tools, maxTokens: getQaMaxOutputTokens() ?? undefined });
-            const response = await fetch(fallbackRequest.url, {
-                method: "POST",
-                headers: fallbackRequest.headers,
-                body: JSON.stringify(fallbackRequest.body),
-                signal: options?.signal,
-            });
+            const response = await fetchLlmPayload(fallbackRequest, { signal: options?.signal });
             if (!response.ok) throw new Error(`API ${response.status}: ${await response.text()}`);
             const parsed = parseProviderResponse(fallbackRequest.providerKind, await response.json());
             if (parsed.content) await filter.push(parsed.content);
@@ -726,6 +763,22 @@ async function callQaAgentNative(apiConfig: ApiConfig, history: QaEngineMessage[
                 rawResponse: "",
                 providerKind: fallbackRequest.providerKind,
             };
+            // 流式失败转非流式成功的这一跳也要进工坊「调用记录」：主路径（sendLLMToolStreamRequest）
+            // 由聊天引擎按 appId 分流落日志，这条 fallback 是本文件自己发的请求，不补就漏一条，
+            // 而恰恰是刚出过流式故障、最需要排障记录的场景。
+            pushApiLog({
+                characterName: "工坊",
+                source: "qa",
+                channel: "qa",
+                model: apiConfig.defaultModel,
+                messages: fallbackRequest.messagesForLog.map(m => ({
+                    role: m.role,
+                    content: typeof m.content === "string" ? m.content : "[vision: 含图片的多模态消息]",
+                })),
+                rawResponse: JSON.stringify({ content: result.content, reasoning: result.reasoning, toolCalls: result.toolCalls }),
+                reasoning: parsed.reasoning?.trim() || undefined,
+                usage: parsed.usage,
+            });
         }
         await filter.flush();
 

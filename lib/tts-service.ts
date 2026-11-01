@@ -76,10 +76,17 @@ const MINIMAX_EMOTIONS = new Set([
 
 const MINIMAX_SPEED_MIN = 0.5;
 const MINIMAX_SPEED_MAX = 2.0;
+const MINIMAX_PITCH_MIN = -12;
+const MINIMAX_PITCH_MAX = 12;
 
 function normalizeMinimaxSpeed(speed: number | undefined): number {
     if (typeof speed !== "number" || !Number.isFinite(speed)) return 1.0;
     return Math.min(MINIMAX_SPEED_MAX, Math.max(MINIMAX_SPEED_MIN, speed));
+}
+
+function normalizeMinimaxPitch(pitch: number | undefined): number {
+    if (typeof pitch !== "number" || !Number.isFinite(pitch)) return 0;
+    return Math.min(MINIMAX_PITCH_MAX, Math.max(MINIMAX_PITCH_MIN, Math.round(pitch)));
 }
 
 async function synthesizeMinimax(text: string, config: VoiceApiConfig, emotion?: string): Promise<Blob | null> {
@@ -90,7 +97,7 @@ async function synthesizeMinimax(text: string, config: VoiceApiConfig, emotion?:
         voice_id: config.defaultVoice || "male-qn-qingse",
         speed: normalizeMinimaxSpeed(config.speechSpeed),
         vol: 1.0,
-        pitch: 0,
+        pitch: normalizeMinimaxPitch(config.speechPitch),
     };
     const normalizedEmotion = emotion?.trim().toLowerCase();
     if (normalizedEmotion && MINIMAX_EMOTIONS.has(normalizedEmotion)) {
@@ -208,6 +215,20 @@ export function setTtsVolume(volume: number): void {
     if (_sharedAudio) { try { _sharedAudio.volume = _ttsVolume; } catch { /* ignore */ } }
 }
 
+// ── 通话音频会话开关 ──
+// 只有通话界面在场时才让 Web Audio 上下文保持 running。此前全局点击解锁会把
+// 上下文永久 resume，页面从第一次点击起就一直持有系统音频会话；叠加通话退出
+// 后识别泄漏，整页音频会被钉在"通话模式"（语音条/试听音量巨大且音量键失灵）。
+let _callAudioSessionActive = false;
+
+/** 通话界面挂载时置 true、卸载/挂断时置 false（false 时立即挂起空闲的上下文）。 */
+export function setCallAudioSessionActive(active: boolean): void {
+    _callAudioSessionActive = active;
+    if (!active && _audioCtx && !_activeGain) {
+        try { void _audioCtx.suspend(); } catch { /* ignore */ }
+    }
+}
+
 function getAudioContext(): AudioContext | null {
     if (typeof window === "undefined") return null;
     const Ctor = (window as any).AudioContext || (window as any).webkitAudioContext;
@@ -229,18 +250,22 @@ function getSharedAudio(): HTMLAudioElement {
 }
 
 function silentWavUrl(): string {
-    // A few ms of 8-bit mono PCM silence — a valid source so play() actually
+    // A few ms of 16-bit mono PCM silence — a valid source so play() actually
     // starts (and thus unlocks the element) on iOS.
-    const numSamples = 16;
-    const buffer = new ArrayBuffer(44 + numSamples);
+    // 采样率用 48kHz 而不是 8kHz：iOS 的系统音频会话采样率会跟着刚播放的媒体走，
+    // 解锁音若是 8kHz，紧接着播的 TTS 会被压到 4kHz 以下而发闷（与保活音同理）。
+    const sampleRate = 48000;
+    const numSamples = 96; // 2ms
+    const dataSize = numSamples * 2;
+    const buffer = new ArrayBuffer(44 + dataSize);
     const view = new DataView(buffer);
     const writeStr = (off: number, s: string) => { for (let i = 0; i < s.length; i++) view.setUint8(off + i, s.charCodeAt(i)); };
-    writeStr(0, "RIFF"); view.setUint32(4, 36 + numSamples, true); writeStr(8, "WAVE");
+    writeStr(0, "RIFF"); view.setUint32(4, 36 + dataSize, true); writeStr(8, "WAVE");
     writeStr(12, "fmt "); view.setUint32(16, 16, true); view.setUint16(20, 1, true);
-    view.setUint16(22, 1, true); view.setUint32(24, 8000, true); view.setUint32(28, 8000, true);
-    view.setUint16(32, 1, true); view.setUint16(34, 8, true);
-    writeStr(36, "data"); view.setUint32(40, numSamples, true);
-    for (let i = 0; i < numSamples; i++) view.setUint8(44 + i, 128); // 8-bit silence = 128
+    view.setUint16(22, 1, true); view.setUint32(24, sampleRate, true); view.setUint32(28, sampleRate * 2, true);
+    view.setUint16(32, 2, true); view.setUint16(34, 16, true);
+    writeStr(36, "data"); view.setUint32(40, dataSize, true);
+    // 16-bit PCM 静音为 0，ArrayBuffer 默认全 0，无需再写
     return URL.createObjectURL(new Blob([buffer], { type: "audio/wav" }));
 }
 
@@ -254,8 +279,16 @@ export function unlockAudioPlayback(): void {
 
     // Primary path: resume the Web Audio context within the gesture. Once
     // resumed under a gesture, subsequent programmatic resume()s are allowed.
+    // 非通话期只借这次手势拿"授权"，随即挂起——不让页面平时一直持有音频会话。
     const ctx = getAudioContext();
-    if (ctx && ctx.state === "suspended") ctx.resume().catch(() => {});
+    if (ctx && ctx.state === "suspended") {
+        const keepRunning = _callAudioSessionActive;
+        ctx.resume().then(() => {
+            if (!keepRunning && !_activeGain && !_callAudioSessionActive) {
+                try { void ctx.suspend(); } catch { /* ignore */ }
+            }
+        }).catch(() => {});
+    }
 
     // Fallback path: unlock the shared <audio> element once.
     if (_audioUnlocked) return;
