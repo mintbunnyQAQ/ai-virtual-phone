@@ -13,6 +13,7 @@ import { GeneratedImageErrorDialog } from "./generated-image-error-dialog";
 import { PhotoInputModal, TextPhotoModal, VoiceRecordModal, RedPacketModal, LocationInputModal, SystemInstructionModal } from "./rich-input-modals";
 import { EmojiPanel, StickerPanel } from "./emoji-panel";
 import { StickerSearchSuggest } from "./sticker-search-suggest";
+import { loadChatInputDraft, saveChatInputDraft, clearChatInputDraft } from "@/lib/chat-input-draft";
 import { StateValuesPanel } from "./state-values-panel";
 import { generateChatCompletion, generateOfflineChatCompletion, flattenCompletionResult, ChatEngineError } from "@/lib/chat-engine";
 import { formatOfflineTurnXml as formatOfflineTurnXmlShared, buildOfflinePromptHistory as buildOfflinePromptHistoryShared } from "@/lib/offline-prompt-builder";
@@ -628,6 +629,7 @@ const ChatTextInputBar = memo(forwardRef<ChatTextInputHandle, {
     onStopGeneration: () => void;
     onTriggerAIResponse: () => void;
 	onSendSticker: (name: string, url?: string) => void;
+    sessionId: string;
 }>(function ChatTextInputBar({
     characterName,
     characterId,
@@ -659,8 +661,9 @@ const ChatTextInputBar = memo(forwardRef<ChatTextInputHandle, {
     onStopGeneration,
     onTriggerAIResponse,
     onSendSticker,
+    sessionId,
 }, ref) {
-    const [inputText, setInputText] = useState("");
+    const [inputText, setInputText] = useState(() => loadChatInputDraft(sessionId, "online"));
     const textareaRef = useRef<HTMLTextAreaElement | null>(null);
     // 表情包搜索联想：ESC/失焦置 true 隐藏，输入变化重新开启
     const [suggestClosed, setSuggestClosed] = useState(false);
@@ -707,6 +710,7 @@ const ChatTextInputBar = memo(forwardRef<ChatTextInputHandle, {
         if (!trimmed) return;
         if (!onSendText(trimmed)) return;
         setInputText("");
+        clearChatInputDraft(sessionId);
         resetTextareaHeight();
         onClosePanels();
     };
@@ -1098,8 +1102,30 @@ export function ChatRoom({ session, onBack, onDeleted }: ChatRoomProps) {
         /** 单聊：按空行定型的分段气泡列表，最后一段在打字 */
         texts?: string[];
         parts?: { characterId: string; characterName: string; texts: string[] }[];
-    }>(null);
-    const [offlineStreamPreview, setOfflineStreamPreview] = useState<null | { content: string; summary: string }>(null);
+    }>(() => {
+        if (typeof window === "undefined") return null;
+        try {
+            const saved = localStorage.getItem(`stream_preview_${session.id}`);
+            return saved ? JSON.parse(saved) : null;
+        } catch { return null; }
+    });
+    const [offlineStreamPreview, setOfflineStreamPreview] = useState<null | { content: string; summary: string }>(() => {
+        if (typeof window === "undefined") return null;
+        try {
+            const saved = localStorage.getItem(`offline_stream_preview_${session.id}`);
+            return saved ? JSON.parse(saved) : null;
+        } catch { return null; }
+    });
+
+    useEffect(() => {
+        if (streamPreview) localStorage.setItem(`stream_preview_${session.id}`, JSON.stringify(streamPreview));
+        else localStorage.removeItem(`stream_preview_${session.id}`);
+    }, [streamPreview, session.id]);
+
+    useEffect(() => {
+        if (offlineStreamPreview) localStorage.setItem(`offline_stream_preview_${session.id}`, JSON.stringify(offlineStreamPreview));
+        else localStorage.removeItem(`offline_stream_preview_${session.id}`);
+    }, [offlineStreamPreview, session.id]);
     const streamAccumRef = useRef("");
     const offlineStreamAccumRef = useRef("");
     // 群聊/单聊流式预览解析的 rAF 合并帧（限频：一帧最多解析一次全文）
